@@ -1,14 +1,19 @@
-FROM ubuntu:22.04 AS compiler-common
+# Pin to specific digest for reproducibility
+# To update: docker pull ubuntu:22.04 && docker inspect ubuntu:22.04 --format='{{index .RepoDigests 0}}'
+FROM ubuntu:22.04@sha256:0e5e4a57c2499249aafc3b40fcd541e9a456aab7296681a3994d631587203f97 AS compiler-common
 ENV DEBIAN_FRONTEND=noninteractive
-ENV LANG C.UTF-8
-ENV LC_ALL C.UTF-8
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
 
 ENV AUTOVACUUM=on
 ENV UPDATES=disabled
 ENV REPLICATION_URL=https://planet.openstreetmap.org/replication/hour/
 ENV MAX_INTERVAL_SECONDS=3600
-ENV PG_VERSION 15
+ENV PG_VERSION=15
 ENV DOWNLOAD_PBF=
+
+ENV SRC_DIR=/app
+ENV STYLE_DIR=/app/style
 
 # Based on
 # https://switch2osm.org/serving-tiles/manually-building-a-tile-server-18-04-lts/
@@ -73,8 +78,8 @@ RUN echo "renderer:renderer" | sudo chpasswd
 # RUN apt install libapache2-mod-tile renderd
 
 # Configure Noto Emoji font
-RUN mkdir -p /home/renderer/src \
-&& cd /home/renderer/src \
+RUN mkdir -p $SRC_DIR \
+&& cd $SRC_DIR \
 && git clone https://github.com/googlei18n/noto-emoji.git \
 && git -C noto-emoji checkout e0aa9412575fc39384efd39f90c4390d66bdd18f \
 && cp noto-emoji/fonts/NotoColorEmoji.ttf /usr/share/fonts/truetype/noto \
@@ -85,14 +90,15 @@ RUN mkdir -p /home/renderer/src \
 RUN wget --quiet https://github.com/googlefonts/noto-emoji/blob/9a5261d871451f9b5183c93483cbd68ed916b1e9/fonts/NotoEmoji-Regular.ttf?raw=true --content-disposition -P /usr/share/fonts/
 
 # Configure stylesheet
-RUN mkdir -p /home/renderer/src \
- && cd /home/renderer/src \
- && git clone https://github.com/bencollinsuk/world-bike-map-cartocss-style.git \
- && cd world-bike-map-cartocss-style \
- && sed -i 's/, "unifont Medium", "Unifont Upper Medium"//g' style/fonts.mss \
- && sed -i 's/"Noto Sans Tibetan Regular",//g' style/fonts.mss \
- && sed -i 's/"Noto Sans Tibetan Bold",//g' style/fonts.mss \
- && sed -i 's/Noto Sans Syriac Eastern Regular/Noto Sans Syriac Regular/g' style/fonts.mss \
+WORKDIR $SRC_DIR
+
+RUN git clone https://github.com/bencollinsuk/world-bike-map-cartocss-style.git $STYLE_DIR
+
+WORKDIR $STYLE_DIR
+RUN sed -i 's/, "unifont Medium", "Unifont Upper Medium"//g' style-dark/fonts.mss \
+ && sed -i 's/"Noto Sans Tibetan Regular",//g' style-dark/fonts.mss \
+ && sed -i 's/"Noto Sans Tibetan Bold",//g' style-dark/fonts.mss \
+ && sed -i 's/Noto Sans Syriac Eastern Regular/Noto Sans Syriac Regular/g' style-dark/fonts.mss \
  && cp views.sql / \
  && rm -rf .git \
  && echo 'INFO: Installing carto' \
@@ -103,9 +109,11 @@ RUN mkdir -p /home/renderer/src \
  && wget -O land-polygons.zip http://osmdata.openstreetmap.de/download/land-polygons-split-3857.zip \
  && unzip simplified-land-polygons.zip \
  && unzip land-polygons.zip \
- && rm /home/renderer/src/world-bike-map-cartocss-style/data/*.zip \
+ && rm *.zip \
  && cd .. \
  && sed -i 's/dbname: "osm"/dbname: "gis"/g' project.mml \
+ && sed -i 's/user: postgres/user: renderer/g' project.mml \
+ && sed -i 's/password: postgres/password: renderer/g' project.mml \
  && sed -i 's,http://osmdata.openstreetmap.de/download/simplified-land-polygons-complete-3857.zip,data/simplified-land-polygons-complete-3857/simplified_land_polygons.shp,g' project.mml \
  && sed -i 's,http://osmdata.openstreetmap.de/download/land-polygons-split-3857.zip,data/land-polygons-split-3857/land_polygons.shp,g' project.mml
 
@@ -137,37 +145,44 @@ RUN ln -sf /dev/stdout /var/log/apache2/access.log \
 
 # Create volume directories
 RUN mkdir -p /run/renderd/ \
-  &&  mkdir  -p  /data/style/  \
-  &&  mkdir  -p  /home/renderer/src/  \
-  &&  chown  -R  renderer:  /data/  \
-  &&  chown  -R  renderer:  /home/renderer/src/  \
-  &&  chown  -R  renderer:  /run/renderd  \
-  &&  chown  -R  renderer: /var/cache/renderd/tiles \
-;
+  && mkdir -p /data/style/ \
+  && chown -R renderer: /data/ \
+  && chown -R renderer: $SRC_DIR \
+  && chown -R renderer: /run/renderd \
+  && chown -R renderer: /var/cache/renderd/tiles
 
 # Copy update scripts
 COPY openstreetmap-tiles-update-expire /usr/bin/
 RUN chmod +x /usr/bin/openstreetmap-tiles-update-expire \
  && mkdir /var/log/tiles \
  && chmod a+rw /var/log/tiles \
- && ln -s /home/renderer/src/mod_tile/osmosis-db_replag /usr/bin/osmosis-db_replag \
+ && ln -s $SRC_DIR/mod_tile/osmosis-db_replag /usr/bin/osmosis-db_replag \
  && echo "*  *    * * *   renderer    openstreetmap-tiles-update-expire\n" >> /etc/crontab
 
 # Install trim_osc.py helper script
-RUN mkdir -p /home/renderer/src \
- && cd /home/renderer/src \
- && git clone https://github.com/zverik/regional \
+WORKDIR $SRC_DIR
+RUN git clone https://github.com/zverik/regional \
  && cd regional \
  && git checkout 889d630a1e1a1bacabdd1dad6e17b49e7d58cd4b \
  && rm -rf .git \
- && chmod u+x /home/renderer/src/regional/trim_osc.py
+ && chmod u+x $SRC_DIR/regional/trim_osc.py
+
+# Copy scripts
+COPY ./scripts/render_list_geo.pl indexes.sql scripts/server.sh scripts/import.sh wait-for-it.sh wait-for-file.sh /
+
+# Set ownership for renderer user on directories they need to write to
+RUN chown -R renderer:renderer /home/renderer \
+ && chown -R renderer:renderer $SRC_DIR \
+ && chown -R renderer:renderer /var/lib/mod_tile \
+ && chown -R renderer:renderer /var/run/renderd \
+ && chown -R renderer:renderer /var/cache/renderd/tiles \
+ && chmod +x /server.sh /import.sh /wait-for-it.sh /wait-for-file.sh /render_list_geo.pl
+
+# Health check - verify Apache is responding
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD curl -f http://localhost/ || exit 1
 
 # Start running
-COPY ./scripts/render_list_geo.pl /
-COPY indexes.sql /
-COPY scripts/server.sh /
-COPY scripts/import.sh /
-COPY wait-for-it.sh /
-COPY wait-for-file.sh /
+WORKDIR /
 CMD ["run.sh"]
 EXPOSE 80

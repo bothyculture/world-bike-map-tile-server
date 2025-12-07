@@ -4,19 +4,18 @@ set -euo pipefail
 
 # set -x
 
+cd "$STYLE_DIR" || exit 1
+echo "INFO: Working in $STYLE_DIR"
+
 echo "INFO: Running carto"
-mkdir -p /home/renderer/src \
- && cd /home/renderer/src \
- && cd world-bike-map-cartocss-style \
- && sed -i 's/dbname: "osm"/dbname: "gis"/g' project.mml \
+sed -i 's/dbname: "osm"/dbname: "gis"/g' project.mml \
  && sed -i "s/database_host/$PGHOST/g" project.mml \
- && carto project.mml > mapnik.xml
+ && carto project.mml > mapnik.xml || exit 1
 
 cd /
 
 sudo -E -u renderer echo "$PGHOST:5432:gis:$PGUSER:$PGPASSWORD" > /home/renderer/.pgpass
 sudo chmod 0600 /home/renderer/.pgpass
-sudo cat /home/renderer/.pgpass
 
 # RESULT=$(PGPASSWORD=$PGPASSWORD psql -h $PGHOST -U $PGUSER -d gis -c "SELECT EXISTS (SELECT 1 FROM information_schema.views WHERE table_name = 'planet_osm_polygon');")
 

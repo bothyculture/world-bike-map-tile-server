@@ -4,13 +4,13 @@ set -euo pipefail
 
 # set -x
 
+cd "$STYLE_DIR" || exit 1
+echo "INFO: Working in $STYLE_DIR"
+
 echo "INFO: Running carto"
-mkdir -p /home/renderer/src \
- && cd /home/renderer/src \
- && cd world-bike-map-cartocss-style \
- && sed -i 's/dbname: "osm"/dbname: "gis"/g' project.mml \
- && sed -i "s/database_host/$PGHOST/g" project.mml \
- && carto project.mml > mapnik.xml
+sed -i 's/dbname: "osm"/dbname: "gis"/g' project.mml \
+&& sed -i "s/database_host/$PGHOST/g" project.mml \
+&& carto project.mml > mapnik.xml || exit 1
 
 cd /
 
@@ -63,7 +63,7 @@ fi
 
 # Import data
 echo "INFO: Running osm2pgsql"
-sudo -E -u renderer osm2pgsql --verbose --cache ${CACHE:-8000} -d postgresql://$PGUSER:renderer@$PGHOST:5432/gis --create --slim -G --hstore \
+sudo -E -u renderer osm2pgsql --verbose --cache ${CACHE:-8000} -d postgresql://$PGUSER:$PGPASSWORD@$PGHOST:5432/gis --create --slim -G --hstore \
     --number-processes ${THREADS:-8} \
     ${OSM2PGSQL_EXTRA_ARGS} \
     /osm-data/data.osm.pbf 

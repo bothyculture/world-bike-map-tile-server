@@ -1,7 +1,12 @@
-FROM ubuntu:22.04 AS compiler-common
+# Pin to specific digest for reproducibility
+# To update: docker pull ubuntu:22.04 && docker inspect ubuntu:22.04 --format='{{index .RepoDigests 0}}'
+FROM ubuntu:22.04@sha256:0e5e4a57c2499249aafc3b40fcd541e9a456aab7296681a3994d631587203f97 AS compiler-common
 ENV DEBIAN_FRONTEND=noninteractive
-ENV LANG C.UTF-8
-ENV LC_ALL C.UTF-8
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+
+# Common paths
+ENV SRC_DIR=/app
 
 RUN apt-get update \
 && apt-get install -y --no-install-recommends \
@@ -28,12 +33,12 @@ RUN cd ~ \
 ###########################################################################################################
 
 FROM compiler-common AS compiler-helper-script
-RUN mkdir -p /home/renderer/src \
-&& cd /home/renderer/src \
+RUN mkdir -p $SRC_DIR \
+&& cd $SRC_DIR \
 && git clone https://github.com/zverik/regional \
 && cd regional \
 && rm -rf .git \
-&& chmod u+x /home/renderer/src/regional/trim_osc.py
+&& chmod u+x $SRC_DIR/regional/trim_osc.py
 
 ###########################################################################################################
 
@@ -46,7 +51,8 @@ ENV AUTOVACUUM=on
 ENV UPDATES=disabled
 ENV REPLICATION_URL=https://planet.openstreetmap.org/replication/hour/
 ENV MAX_INTERVAL_SECONDS=3600
-ENV PG_VERSION 15
+ENV PG_VERSION=15
+ENV TZ=UTC
 
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
@@ -95,7 +101,7 @@ COPY openstreetmap-tiles-update-expire /usr/bin/
 RUN chmod +x /usr/bin/openstreetmap-tiles-update-expire \
 && mkdir /var/log/tiles \
 && chmod a+rw /var/log/tiles \
-&& ln -s /home/renderer/src/mod_tile/osmosis-db_replag /usr/bin/osmosis-db_replag \
+&& ln -s $SRC_DIR/mod_tile/osmosis-db_replag /usr/bin/osmosis-db_replag \
 && echo "* * * * *   renderer    openstreetmap-tiles-update-expire.sh\n" >> /etc/crontab
 
 # Configure PosgtreSQL
@@ -107,27 +113,31 @@ RUN chown -R postgres:postgres /var/lib/postgresql \
 
 # Create volume directories
 RUN mkdir -p /run/renderd/ \
-  &&  mkdir  -p  /data/database/  \
-  &&  mkdir  -p  /data/style/  \
-  &&  mkdir  -p  /home/renderer/src/  \
-  &&  chown  -R  renderer:  /data/  \
-  &&  chown  -R  renderer:  /home/renderer/src/  \
-  &&  chown  -R  renderer:  /run/renderd  \
-  &&  mv  /var/lib/postgresql/$PG_VERSION/main/  /data/database/postgres/  \
-  &&  mv  /var/cache/renderd/tiles/            /data/tiles/     \
-  &&  chown  -R  renderer: /data/tiles \
-  &&  ln  -s  /data/database/postgres  /var/lib/postgresql/$PG_VERSION/main             \
-  &&  ln  -s  /data/style              /home/renderer/src/openstreetmap-carto  \
-  &&  ln  -s  /data/tiles              /var/cache/renderd/tiles                \
-;
+  && mkdir -p /data/database/ \
+  && mkdir -p /data/style/ \
+  && mkdir -p $SRC_DIR \
+  && chown -R renderer: /data/ \
+  && chown -R renderer: $SRC_DIR \
+  && chown -R renderer: /run/renderd \
+  && mv /var/lib/postgresql/$PG_VERSION/main/ /data/database/postgres/ \
+  && mv /var/cache/renderd/tiles/ /data/tiles/ \
+  && chown -R renderer: /data/tiles \
+  && ln -s /data/database/postgres /var/lib/postgresql/$PG_VERSION/main \
+  && ln -s /data/style $SRC_DIR/openstreetmap-carto \
+  && ln -s /data/tiles /var/cache/renderd/tiles
 
 # Install helper script
-COPY --from=compiler-helper-script /home/renderer/src/regional /home/renderer/src/regional
+COPY --from=compiler-helper-script $SRC_DIR/regional $SRC_DIR/regional
+
+# Health check for PostgreSQL
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
+  CMD pg_isready -U $PGUSER -d gis || exit 1
 
 # Start running
 COPY ./scripts/db.sh /
+RUN chmod +x /db.sh
 ENTRYPOINT ["/db.sh"]
 CMD []
-EXPOSE 80 5432
+EXPOSE 5432
 
 

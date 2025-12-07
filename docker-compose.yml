@@ -1,4 +1,3 @@
-version: '3'
 
 services:
   db:
@@ -9,27 +8,34 @@ services:
     environment:
       - OSM2PGSQL_EXTRA_ARGS=-C 8192
       - PGDATA=/var/lib/postgresql/data
-      - PGPASSWORD=renderer
+      - PGPASSWORD=${PGPASSWORD}
       - POSTGRES_DB=gis
-      - POSTGRES_PASSWORD=renderer
-      - POSTGRES_USER=renderer
+      - POSTGRES_USER=${PGUSER}
+      - POSTGRES_PASSWORD=${PGPASSWORD}
       - THREADS=4
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PGUSER} -d gis"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     deploy:
       resources:
         reservations:
-          cpus: '4'
+          cpus: "4"
           memory: 2G
     ports:
       - "5432:5432"
 
   import:
-    command: ["/bin/sh", "-c", "/wait-for-it.sh db:5432 -t 0 && /import.sh"]
+    command: ["/bin/sh", "-c", "/import.sh"]
     build:
       context: .
       dockerfile: Dockerfile
     image: world-bike-map-tile-server
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     volumes:
       - osm-data:/osm-data
       - osm-tiles:/var/lib/mod_tile
@@ -43,22 +49,30 @@ services:
       - DOWNLOAD_PBF=https://download.geofabrik.de/europe/isle-of-man-latest.osm.pbf
       - WGET_ARGS=--quiet
       - DOWNLOAD_POLY=
-      - MAX_ZOOM=15
+      - MAX_ZOOM=3
       - ALLOW_CORS=1
     deploy:
       resources:
         reservations:
-          cpus: '12'
+          cpus: "12"
           memory: 2G
 
   server:
-    command: ["/bin/sh", "-c", "/wait-for-it.sh db:5432 -t 0 && ls -l /import-status && /wait-for-file.sh /import-status/ready -t 0 && /server.sh"]
+    command:
+      [
+        "/bin/sh",
+        "-c",
+        "/wait-for-file.sh /import-status/ready -t 0 && /server.sh",
+      ]
     build:
       context: .
       dockerfile: Dockerfile
     image: world-bike-map-tile-server
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+      import:
+        condition: service_completed_successfully
     volumes:
       - osm-data:/osm-data
       - osm-tiles:/var/lib/mod_tile
@@ -77,7 +91,7 @@ services:
     deploy:
       resources:
         reservations:
-          cpus: '12'
+          cpus: "12"
           memory: 2G
     ports:
       - "8080:80"

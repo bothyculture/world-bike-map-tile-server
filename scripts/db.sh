@@ -2,6 +2,8 @@
 
 set -euo pipefail
 
+# Fallback to environment variable or default
+PGPASSWORD="${PGPASSWORD}"
 
 if [ ! -f /DB_INITIALIZED ]; then
 
